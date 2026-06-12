@@ -224,8 +224,51 @@ async function initDb(db) {
     CREATE INDEX IF NOT EXISTS idx_reschedule_user ON booking_reschedule_requests(user_id);
     CREATE INDEX IF NOT EXISTS idx_reschedule_status ON booking_reschedule_requests(status);
     CREATE INDEX IF NOT EXISTS idx_reschedule_room_date ON booking_reschedule_requests(room_id, target_date);
+    CREATE TABLE IF NOT EXISTS booking_appeals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      booking_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      appeal_type TEXT NOT NULL CHECK(appeal_type IN ('no_show', 'cancel_late', 'credit_deduction')),
+      reason TEXT NOT NULL,
+      evidence TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected', 'processing')),
+      original_status TEXT,
+      original_credit_change INTEGER DEFAULT 0,
+      handler_id INTEGER,
+      handler_role TEXT,
+      handle_note TEXT,
+      handled_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (booking_id) REFERENCES bookings(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (handler_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS booking_appeal_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      appeal_id INTEGER NOT NULL,
+      booking_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      action_detail TEXT,
+      operator_id INTEGER,
+      operator_role TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (appeal_id) REFERENCES booking_appeals(id),
+      FOREIGN KEY (booking_id) REFERENCES bookings(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (operator_id) REFERENCES users(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_reschedule_logs_booking ON booking_reschedule_logs(booking_id);
     CREATE INDEX IF NOT EXISTS idx_reschedule_logs_request ON booking_reschedule_logs(request_id);
+    CREATE INDEX IF NOT EXISTS idx_appeals_booking ON booking_appeals(booking_id);
+    CREATE INDEX IF NOT EXISTS idx_appeals_user ON booking_appeals(user_id);
+    CREATE INDEX IF NOT EXISTS idx_appeals_status ON booking_appeals(status);
+    CREATE INDEX IF NOT EXISTS idx_appeals_created ON booking_appeals(created_at);
+    CREATE INDEX IF NOT EXISTS idx_appeal_logs_appeal ON booking_appeal_logs(appeal_id);
+    CREATE INDEX IF NOT EXISTS idx_appeal_logs_booking ON booking_appeal_logs(booking_id);
   `);
 
   const userCount = await db.get('SELECT COUNT(*) as count FROM users');

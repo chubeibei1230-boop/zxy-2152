@@ -259,6 +259,80 @@ async function setRestriction(db, userId, isRestricted, reason, operatorId, oper
   return { is_restricted: isRestricted, reason };
 }
 
+async function handleAppealApprove(db, appeal, operatorId, operatorRole) {
+  const booking = await db.get('SELECT * FROM bookings WHERE id = ?', [appeal.booking_id]);
+  if (!booking) {
+    throw new Error('关联预约不存在');
+  }
+
+  const result = {
+    booking_updated: false,
+    credit_reverted: false,
+    credit_change: null,
+    old_status: booking.status,
+    new_status: null
+  };
+
+  if (appeal.appeal_type === 'no_show' && booking.status === 'no_show') {
+    await db.run(
+      `UPDATE bookings SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, 
+       cancel_reason = ?, no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
+      ['申诉通过：未到场标记撤销', appeal.booking_id]
+    );
+    result.booking_updated = true;
+    result.new_status = 'cancelled';
+
+    const revertedCredit = await updateCreditScore(
+      db, booking.user_id, CREDIT_CONFIG.noShowPenalty, 'reset',
+      `申诉通过：撤销未到场扣分（预约#${appeal.booking_id}）`,
+      { bookingId: appeal.booking_id, operatorId, operatorRole }
+    );
+    result.credit_reverted = true;
+    result.credit_change = revertedCredit;
+  } else if (appeal.appeal_type === 'cancel_late') {
+    const creditRecords = await db.all(
+      `SELECT * FROM credit_records WHERE booking_id = ? AND change_type = 'cancel_late' ORDER BY id DESC LIMIT 1`,
+      [appeal.booking_id]
+    );
+    if (creditRecords.length > 0) {
+      const record = creditRecords[0];
+      const revertAmount = Math.abs(record.score_change);
+      const revertedCredit = await updateCreditScore(
+        db, booking.user_id, revertAmount, 'reset',
+        `申诉通过：撤销临时取消扣分（预约#${appeal.booking_id}）`,
+        { bookingId: appeal.booking_id, operatorId, operatorRole }
+      );
+      result.credit_reverted = true;
+      result.credit_change = revertedCredit;
+    }
+  } else if (appeal.appeal_type === 'credit_deduction') {
+    const revertAmount = Math.abs(appeal.original_credit_change) || CREDIT_CONFIG.noShowPenalty;
+    const revertedCredit = await updateCreditScore(
+      db, booking.user_id, revertAmount, 'reset',
+      `申诉通过：信用分扣减撤销（预约#${appeal.booking_id}）`,
+      { bookingId: appeal.booking_id, operatorId, operatorRole }
+    );
+    result.credit_reverted = true;
+    result.credit_change = revertedCredit;
+
+    if (booking.status === 'no_show') {
+      await db.run(
+        `UPDATE bookings SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, 
+         cancel_reason = ?, no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
+        ['申诉通过：异常状态修正', appeal.booking_id]
+      );
+      result.booking_updated = true;
+      result.new_status = 'cancelled';
+    }
+  }
+
+  if (result.booking_updated || result.credit_reverted) {
+    await updateCreditStats(db, booking.user_id);
+  }
+
+  return result;
+}
+
 module.exports = {
   CREDIT_CONFIG,
   getLevelByScore,
@@ -271,5 +345,6 @@ module.exports = {
   handleCancel,
   checkBookingPermission,
   manualAdjust,
-  setRestriction
+  setRestriction,
+  handleAppealApprove
 };
