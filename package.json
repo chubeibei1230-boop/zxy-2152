@@ -1,0 +1,21 @@
+{
+  "name": "practice-room-booking",
+  "version": "1.0.0",
+  "description": "共享练琴房预约管理系统服务端",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.7",
+    "sqlite": "^5.1.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1"
+  }
+}
