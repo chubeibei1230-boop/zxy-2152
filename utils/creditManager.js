@@ -275,12 +275,12 @@ async function handleAppealApprove(db, appeal, operatorId, operatorRole) {
 
   if (appeal.appeal_type === 'no_show' && booking.status === 'no_show') {
     await db.run(
-      `UPDATE bookings SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, 
-       cancel_reason = ?, no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
-      ['申诉通过：未到场标记撤销', appeal.booking_id]
+      `UPDATE bookings SET status = 'arrived', arrived_at = CURRENT_TIMESTAMP, 
+       no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
+      [appeal.booking_id]
     );
     result.booking_updated = true;
-    result.new_status = 'cancelled';
+    result.new_status = 'arrived';
 
     const revertedCredit = await updateCreditScore(
       db, booking.user_id, CREDIT_CONFIG.noShowPenalty, 'reset',
@@ -306,23 +306,25 @@ async function handleAppealApprove(db, appeal, operatorId, operatorRole) {
       result.credit_change = revertedCredit;
     }
   } else if (appeal.appeal_type === 'credit_deduction') {
-    const revertAmount = Math.abs(appeal.original_credit_change) || CREDIT_CONFIG.noShowPenalty;
-    const revertedCredit = await updateCreditScore(
-      db, booking.user_id, revertAmount, 'reset',
-      `申诉通过：信用分扣减撤销（预约#${appeal.booking_id}）`,
-      { bookingId: appeal.booking_id, operatorId, operatorRole }
-    );
-    result.credit_reverted = true;
-    result.credit_change = revertedCredit;
+    const revertAmount = Math.abs(appeal.original_credit_change);
+    if (revertAmount > 0) {
+      const revertedCredit = await updateCreditScore(
+        db, booking.user_id, revertAmount, 'reset',
+        `申诉通过：信用分扣减撤销（预约#${appeal.booking_id}）`,
+        { bookingId: appeal.booking_id, operatorId, operatorRole }
+      );
+      result.credit_reverted = true;
+      result.credit_change = revertedCredit;
+    }
 
     if (booking.status === 'no_show') {
       await db.run(
-        `UPDATE bookings SET status = 'cancelled', cancelled_at = CURRENT_TIMESTAMP, 
-         cancel_reason = ?, no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
-        ['申诉通过：异常状态修正', appeal.booking_id]
+        `UPDATE bookings SET status = 'arrived', arrived_at = CURRENT_TIMESTAMP, 
+         no_show_at = NULL, no_show_note = NULL WHERE id = ?`,
+        [appeal.booking_id]
       );
       result.booking_updated = true;
-      result.new_status = 'cancelled';
+      result.new_status = 'arrived';
     }
   }
 

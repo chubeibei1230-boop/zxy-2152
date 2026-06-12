@@ -96,11 +96,14 @@ router.post('/appeals', requireRole('booker', 'admin'), async (req, res) => {
     } else if (appeal_type === 'cancel_late') {
       const creditRecord = await db.get(
         `SELECT score_change FROM credit_records 
-         WHERE booking_id = ? AND change_type = 'cancel_late' 
+         WHERE booking_id = ? AND change_type = 'cancel_late' AND score_change < 0 
          ORDER BY id DESC LIMIT 1`,
         [booking_id]
       );
-      originalCreditChange = creditRecord ? creditRecord.score_change : -CREDIT_CONFIG.lateCancelPenalty;
+      if (!creditRecord) {
+        return res.status(400).json({ error: '该预约没有临时取消扣减记录，无法提交此类申诉' });
+      }
+      originalCreditChange = creditRecord.score_change;
     } else if (appeal_type === 'credit_deduction') {
       const creditRecord = await db.get(
         `SELECT score_change FROM credit_records 
@@ -108,7 +111,10 @@ router.post('/appeals', requireRole('booker', 'admin'), async (req, res) => {
          ORDER BY id DESC LIMIT 1`,
         [booking_id]
       );
-      originalCreditChange = creditRecord ? creditRecord.score_change : 0;
+      if (!creditRecord) {
+        return res.status(400).json({ error: '该预约没有信用分扣减记录，无法提交此类申诉' });
+      }
+      originalCreditChange = creditRecord.score_change;
     }
 
     const result = await db.run(
@@ -711,76 +717,52 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
     const { start_date, end_date, room_id, user_id, appeal_type } = req.query;
     const db = await getDb();
 
-    const whereClauses = ['1=1'];
-    const params = [];
-
-    if (start_date) {
-      whereClauses.push('DATE(a.created_at) >= ?');
-      params.push(start_date);
-    }
-    if (end_date) {
-      whereClauses.push('DATE(a.created_at) <= ?');
-      params.push(end_date);
-    }
-    if (room_id) {
-      whereClauses.push('b.room_id = ?');
-      params.push(room_id);
-    }
-    if (user_id) {
-      whereClauses.push('a.user_id = ?');
-      params.push(user_id);
-    }
-    if (appeal_type) {
-      whereClauses.push('a.appeal_type = ?');
-      params.push(appeal_type);
+    function buildParams(filterRoom = true) {
+      const p = [];
+      if (start_date) { p.push(start_date); }
+      if (end_date) { p.push(end_date); }
+      if (filterRoom && room_id) { p.push(room_id); }
+      if (user_id) { p.push(user_id); }
+      if (appeal_type) { p.push(appeal_type); }
+      return p;
     }
 
-    const baseWhere = whereClauses.join(' AND ');
-    const noRoomWhere = whereClauses
-      .filter(c => !c.includes('b.room_id'))
-      .join(' AND ');
-    const simpleWhere = whereClauses
-      .filter(c => !c.includes('b.room_id'))
-      .join(' AND ')
-      .replace(/a\./g, '');
+    function buildWhere(filterRoom = true, tablePrefix = 'a.') {
+      const clauses = ['1=1'];
+      if (start_date) { clauses.push(`DATE(${tablePrefix}created_at) >= ?`); }
+      if (end_date) { clauses.push(`DATE(${tablePrefix}created_at) <= ?`); }
+      if (filterRoom && room_id) { clauses.push('b.room_id = ?'); }
+      if (user_id) { clauses.push(`${tablePrefix}user_id = ?`); }
+      if (appeal_type) { clauses.push(`${tablePrefix}appeal_type = ?`); }
+      return clauses.join(' AND ');
+    }
+
+    const baseParams = buildParams(true);
+    const noRoomParams = buildParams(false);
 
     const totalAppeals = await db.get(
       `SELECT COUNT(*) as count FROM booking_appeals a 
        LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE ${baseWhere}`,
-      params
+       WHERE ${buildWhere(true)}`,
+      baseParams
     );
-    const pendingCount = await db.get(
-      `SELECT COUNT(*) as count FROM booking_appeals a 
+
+    const statusCounts = await db.all(
+      `SELECT a.status, COUNT(*) as count FROM booking_appeals a 
        LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE a.status = 'pending' AND ${baseWhere.replace('1=1 AND ', '')}`,
-      params
+       WHERE ${buildWhere(true)}
+       GROUP BY a.status`,
+      baseParams
     );
-    const processingCount = await db.get(
-      `SELECT COUNT(*) as count FROM booking_appeals a 
-       LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE a.status = 'processing' AND ${baseWhere.replace('1=1 AND ', '')}`,
-      params
-    );
-    const approvedCount = await db.get(
-      `SELECT COUNT(*) as count FROM booking_appeals a 
-       LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE a.status = 'approved' AND ${baseWhere.replace('1=1 AND ', '')}`,
-      params
-    );
-    const rejectedCount = await db.get(
-      `SELECT COUNT(*) as count FROM booking_appeals a 
-       LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE a.status = 'rejected' AND ${baseWhere.replace('1=1 AND ', '')}`,
-      params
-    );
+    const statusMap = {};
+    statusCounts.forEach(sc => { statusMap[sc.status] = sc.count; });
+
+    const pendingCount = { count: statusMap.pending || 0 };
+    const processingCount = { count: statusMap.processing || 0 };
+    const approvedCount = { count: statusMap.approved || 0 };
+    const rejectedCount = { count: statusMap.rejected || 0 };
 
     const handledTotal = approvedCount.count + rejectedCount.count;
-
-    const typeStatsParams = params.filter((_, i) => {
-      const clausesWithRoom = whereClauses.filter(c => c.includes('b.room_id'));
-      return !clausesWithRoom.length || true;
-    });
 
     const typeStats = await db.all(
       `SELECT a.appeal_type, 
@@ -791,10 +773,10 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
               SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
        FROM booking_appeals a 
        LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE ${baseWhere}
+       WHERE ${buildWhere(true)}
        GROUP BY a.appeal_type 
        ORDER BY total_count DESC`,
-      params
+      baseParams
     );
 
     const typeLabelMap = {};
@@ -814,14 +796,11 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
        FROM booking_appeals a 
        LEFT JOIN bookings b ON a.booking_id = b.id 
        LEFT JOIN rooms rm ON b.room_id = rm.id 
-       WHERE ${baseWhere}
+       WHERE ${buildWhere(true)}
        GROUP BY b.room_id, rm.name 
        ORDER BY total_count DESC`,
-      params
+      baseParams
     );
-
-    const userParams = params.filter(p => true);
-    const userWhere = whereClauses.filter(c => !c.includes('b.room_id')).join(' AND ');
 
     const userTopStats = await db.all(
       `SELECT a.user_id, u.name as user_name, u.username, u.phone,
@@ -830,11 +809,11 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
               SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
        FROM booking_appeals a 
        LEFT JOIN users u ON a.user_id = u.id 
-       WHERE ${userWhere}
+       WHERE ${buildWhere(false, 'a.')}
        GROUP BY a.user_id, u.name, u.username, u.phone 
        ORDER BY total_appeals DESC 
        LIMIT 10`,
-      userParams
+      noRoomParams
     );
     userTopStats.forEach(u => {
       u.approval_rate = (u.approved_count + u.rejected_count) > 0
@@ -842,11 +821,10 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
         : '0%';
     });
 
-    const handlerParams = params.filter(p => true);
-    const handlerWhere = whereClauses
-      .filter(c => !c.includes('b.room_id'))
-      .join(' AND ')
-      .replace('1=1 AND ', '');
+    const handlerWhere = buildWhere(false, 'a.');
+    const handlerWhereClean = handlerWhere === '1=1' 
+      ? 'a.handler_id IS NOT NULL' 
+      : `a.handler_id IS NOT NULL AND ${handlerWhere.replace('1=1 AND ', '')}`;
 
     const handlerStats = await db.all(
       `SELECT a.handler_id, u.name as handler_name, u.username,
@@ -855,10 +833,10 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
               SUM(CASE WHEN a.status = 'rejected' THEN 1 ELSE 0 END) as rejected_count
        FROM booking_appeals a 
        LEFT JOIN users u ON a.handler_id = u.id 
-       WHERE a.handler_id IS NOT NULL ${handlerWhere ? ' AND ' + handlerWhere.replace(/a\./g, '') : ''}
+       WHERE ${handlerWhereClean}
        GROUP BY a.handler_id, u.name, u.username 
        ORDER BY handled_count DESC`,
-      handlerParams
+      noRoomParams
     );
 
     const bookingStatusChanges = await db.get(
@@ -868,8 +846,8 @@ router.get('/appeals/stats', requireRole('attendant', 'admin'), async (req, res)
         SUM(CASE WHEN a.appeal_type = 'credit_deduction' AND a.status = 'approved' THEN 1 ELSE 0 END) as credit_reverted
        FROM booking_appeals a 
        LEFT JOIN bookings b ON a.booking_id = b.id 
-       WHERE ${baseWhere}`,
-      params
+       WHERE ${buildWhere(true)}`,
+      baseParams
     );
 
     res.json({

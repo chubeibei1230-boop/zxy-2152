@@ -170,6 +170,45 @@ async function main() {
     test('重复提交申诉被拒绝', dupAppealResp.status === 409, `status=${dupAppealResp.status}`);
   }
 
+  console.log('\n[4.1] Bug1验证：不能对正常预约提交credit_deduction申诉...');
+  let normalBookingId = null;
+  for (const room of avail.body.availability || []) {
+    const slot = room.slots.find(s => s.status === 'available' && 
+      !(targetRoom && room.room_id === targetRoom.room_id && targetSlot && s.start_time === targetSlot.start_time));
+    if (slot) {
+      const bResp = await req('POST', '/api/bookings', {
+        room_id: room.room_id,
+        date: today,
+        start_time: slot.start_time,
+        end_time: slot.end_time
+      }, booker2Token);
+      if (bResp.status === 201) {
+        normalBookingId = bResp.body.booking?.id;
+        break;
+      }
+    }
+  }
+  if (normalBookingId) {
+    const badCreditResp = await req('POST', '/api/appeals', {
+      booking_id: normalBookingId,
+      appeal_type: 'credit_deduction',
+      reason: '测试无扣分预约提交信用扣减申诉'
+    }, booker2Token);
+    test('无扣分的credit_deduction申诉被拒绝', badCreditResp.status === 400, `status=${badCreditResp.status}`);
+  } else {
+    test('无扣分的credit_deduction申诉被拒绝', true, '无可用时段，跳过测试');
+  }
+
+  console.log('\n[4.2] Bug1验证：不能对非cancelled预约提交cancel_late申诉...');
+  if (bookingId) {
+    const badCancelResp = await req('POST', '/api/appeals', {
+      booking_id: bookingId,
+      appeal_type: 'cancel_late',
+      reason: '测试非取消预约提交临时取消申诉'
+    }, booker2Token);
+    test('非cancelled的cancel_late申诉被拒绝', badCancelResp.status === 400, `status=${badCancelResp.status}`);
+  }
+
   console.log('\n[5] 用户查看自己的申诉列表...');
   const mineResp = await req('GET', '/api/appeals/mine?page_size=10', null, booker2Token);
   test('获取我的申诉列表成功', mineResp.status === 200, `status=${mineResp.status}`);
@@ -226,8 +265,10 @@ async function main() {
     }, adminToken);
     test('审批通过成功', approveResp.status === 200, `status=${approveResp.status}`);
     test('申诉状态变为已通过', approveResp.body.appeal?.status === 'approved', `status=${approveResp.body.appeal?.status}`);
-    test('预约状态被修正', approveResp.body.booking?.status !== 'no_show', `booking_status=${approveResp.body.booking?.status}`);
+    test('Bug2验证：预约状态恢复为已到场(arrived)', approveResp.body.booking?.status === 'arrived', `booking_status=${approveResp.body.booking?.status}`);
+    test('Bug2验证：不是cancelled状态', approveResp.body.booking?.status !== 'cancelled', `booking_status=${approveResp.body.booking?.status}`);
     test('信用分被恢复', approveResp.body.handle_result?.credit_reverted === true);
+    test('Bug1验证：handle_result.new_status为arrived', approveResp.body.handle_result?.new_status === 'arrived', `new_status=${approveResp.body.handle_result?.new_status}`);
 
     const afterCredit = await req('GET', '/api/credit/my-credit', null, booker2Token);
     const beforeScore = beforeCredit.body.credit?.score || 0;
@@ -309,6 +350,26 @@ async function main() {
 
   const userStatsResp = await req('GET', '/api/appeals/stats', null, bookerToken);
   test('普通用户无权获取统计', userStatsResp.status === 403, `status=${userStatsResp.status}`);
+
+  console.log('\n[13.1] Bug3验证：按房间筛选统计...');
+  const roomStatsResp = await req('GET', '/api/appeals/stats?room_id=1', null, adminToken);
+  test('按房间筛选统计成功', roomStatsResp.status === 200, `status=${roomStatsResp.status} msg=${roomStatsResp.body.error || roomStatsResp.body.detail || ''}`);
+  test('按房间筛选后概览有效', roomStatsResp.body.overview?.total_appeals !== undefined);
+  test('按房间筛选后room_stats有效', !!roomStatsResp.body.room_stats);
+
+  console.log('\n[13.2] Bug4验证：按开始日期筛选统计...');
+  const statsDate = new Date().toISOString().split('T')[0];
+  const dateStatsResp = await req('GET', `/api/appeals/stats?start_date=${statsDate}`, null, adminToken);
+  test('按开始日期筛选统计成功', dateStatsResp.status === 200, `status=${dateStatsResp.status} msg=${dateStatsResp.body.error || dateStatsResp.body.detail || ''}`);
+  test('按日期筛选后概览有效', dateStatsResp.body.overview?.total_appeals !== undefined);
+  test('按日期筛选后类型统计有效', !!dateStatsResp.body.type_stats);
+
+  console.log('\n[13.3] Bug3+Bug4验证：同时按房间和日期筛选...');
+  const comboStatsResp = await req('GET', `/api/appeals/stats?room_id=1&start_date=${statsDate}&end_date=${statsDate}`, null, adminToken);
+  test('组合筛选统计成功', comboStatsResp.status === 200, `status=${comboStatsResp.status} msg=${comboStatsResp.body.error || comboStatsResp.body.detail || ''}`);
+  test('组合筛选后总览有效', comboStatsResp.body.overview?.total_appeals !== undefined);
+  test('组合筛选后处理人统计有效', !!comboStatsResp.body.handler_stats);
+  test('组合筛选后用户排行有效', !!comboStatsResp.body.user_top);
 
   console.log('\n========== 测试结果 ==========');
   console.log(`  通过: ${passed}`);
