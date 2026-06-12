@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
+const { checkBookingPermission, handleCancel, handleArrive, getLevelLabel, getUserCredit } = require('../utils/creditManager');
 
 const router = express.Router();
 const LOCK_DURATION_MINUTES = 5;
@@ -87,6 +88,14 @@ router.get('/rooms/availability', async (req, res) => {
     }
 
     const db = await getDb();
+    
+    let userCredit = null;
+    let creditPermission = null;
+    if (req.user.role === 'booker') {
+      creditPermission = await checkBookingPermission(db, req.user.id);
+      userCredit = creditPermission.credit;
+      userCredit.level_label = getLevelLabel(userCredit.level);
+    }
     let roomFilter = '';
     const params = [date];
     if (room_id) {
@@ -166,7 +175,18 @@ router.get('/rooms/availability', async (req, res) => {
       result.push(roomData);
     }
 
-    res.json({ date, availability: result });
+    const response = { date, availability: result };
+    if (userCredit) {
+      response.user_credit = userCredit;
+      response.can_book = creditPermission.allowed;
+      if (!creditPermission.allowed) {
+        response.credit_restriction = creditPermission.reason;
+      }
+      if (creditPermission.warning) {
+        response.credit_warning = creditPermission.warning;
+      }
+    }
+    res.json(response);
   } catch (err) {
     console.error('查询可用性错误:', err);
     res.status(500).json({ error: '服务器内部错误' });
@@ -181,6 +201,18 @@ router.post('/locks', requireRole('booker', 'admin'), async (req, res) => {
     }
 
     const db = await getDb();
+
+    if (req.user.role === 'booker') {
+      const permission = await checkBookingPermission(db, req.user.id);
+      if (!permission.allowed) {
+        return res.status(403).json({ 
+          error: permission.reason,
+          credit: permission.credit,
+          credit_warning: true
+        });
+      }
+    }
+
     const availability = await isSlotAvailable(db, room_id, date, start_time, end_time);
     if (!availability.available) {
       return res.status(409).json({ error: availability.reason });
@@ -253,6 +285,17 @@ router.post('/bookings', requireRole('booker', 'admin'), async (req, res) => {
 
     const db = await getDb();
 
+    if (req.user.role === 'booker') {
+      const permission = await checkBookingPermission(db, req.user.id);
+      if (!permission.allowed) {
+        return res.status(403).json({ 
+          error: permission.reason,
+          credit: permission.credit,
+          credit_warning: true
+        });
+      }
+    }
+
     if (lock_id) {
       const lock = await db.get('SELECT * FROM temp_locks WHERE id = ?', lock_id);
       if (!lock) {
@@ -321,7 +364,14 @@ router.get('/bookings/mine', async (req, res) => {
        WHERE b.user_id = ? ORDER BY b.date DESC, b.start_time DESC`,
       [req.user.id]
     );
-    res.json({ bookings });
+    
+    const credit = await getUserCredit(db, req.user.id);
+    credit.level_label = getLevelLabel(credit.level);
+    
+    res.json({ 
+      bookings,
+      user_credit: credit
+    });
   } catch (err) {
     console.error('获取我的预约错误:', err);
     res.status(500).json({ error: '服务器内部错误' });
@@ -352,13 +402,22 @@ router.put('/bookings/:id/cancel', requireRole('booker', 'admin'), async (req, r
       [cancel_reason || '用户取消', id]
     );
 
+    const creditChange = await handleCancel(
+      db, id, booking.user_id, booking.date, booking.start_time,
+      cancel_reason || '用户取消', req.user.id, req.user.role
+    );
+
     const updated = await db.get(
       `SELECT b.*, r.name as room_name, u.name as user_name FROM bookings b 
        LEFT JOIN rooms r ON b.room_id = r.id LEFT JOIN users u ON b.user_id = u.id 
        WHERE b.id = ?`,
       [id]
     );
-    res.json({ message: '预约取消成功', booking: updated });
+    res.json({ 
+      message: '预约取消成功', 
+      booking: updated,
+      credit_change: creditChange
+    });
   } catch (err) {
     console.error('取消预约错误:', err);
     res.status(500).json({ error: '服务器内部错误' });
@@ -391,13 +450,19 @@ router.put('/bookings/:id/arrive', requireRole('booker', 'attendant', 'admin'), 
       [id]
     );
 
+    const creditChange = await handleArrive(db, id, booking.user_id, req.user.id, req.user.role);
+
     const updated = await db.get(
       `SELECT b.*, r.name as room_name, u.name as user_name FROM bookings b 
        LEFT JOIN rooms r ON b.room_id = r.id LEFT JOIN users u ON b.user_id = u.id 
        WHERE b.id = ?`,
       [id]
     );
-    res.json({ message: '到场确认成功', booking: updated });
+    res.json({ 
+      message: '到场确认成功', 
+      booking: updated,
+      credit_change: creditChange
+    });
   } catch (err) {
     console.error('确认到场错误:', err);
     res.status(500).json({ error: '服务器内部错误' });

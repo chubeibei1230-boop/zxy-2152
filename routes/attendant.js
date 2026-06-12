@@ -2,6 +2,7 @@ const express = require('express');
 const { getDb } = require('../db');
 const { authMiddleware, requireRole } = require('../middleware/auth');
 const { isSlotAvailable, releaseLock } = require('./bookings');
+const { handleNoShow, handleCancel } = require('../utils/creditManager');
 
 const router = express.Router();
 
@@ -31,6 +32,10 @@ router.put('/bookings/:id/no-show', async (req, res) => {
       [no_show_note || '', id]
     );
 
+    const creditChange = await handleNoShow(
+      db, id, booking.user_id, req.user.id, req.user.role, no_show_note || ''
+    );
+
     if (booking.lock_id) {
       await releaseLock(db, booking.lock_id, '未到场释放');
     }
@@ -41,7 +46,11 @@ router.put('/bookings/:id/no-show', async (req, res) => {
        WHERE b.id = ?`,
       [id]
     );
-    res.json({ message: '已标记未到场', booking: updated });
+    res.json({ 
+      message: '已标记未到场', 
+      booking: updated,
+      credit_change: creditChange
+    });
   } catch (err) {
     console.error('标记未到场错误:', err);
     res.status(500).json({ error: '服务器内部错误' });

@@ -11,6 +11,7 @@ const adminRoutes = require('./routes/admin');
 const bookingRoutes = require('./routes/bookings');
 const attendantRoutes = require('./routes/attendant');
 const queryRoutes = require('./routes/query');
+const creditRoutes = require('./routes/credit');
 
 const PORT = process.env.PORT || 8112;
 
@@ -52,6 +53,7 @@ app.get('/api/info', (req, res) => {
       bookings: '/api/* (预约人员功能)',
       attendant: '/api/attendant/* (需要 attendant 或 admin 角色)',
       query: '/api/query/* (已登录用户)',
+      credit: '/api/credit/* (信用管理)',
       health: '/api/health',
       info: '/api/info'
     },
@@ -81,6 +83,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', bookingRoutes);
 app.use('/api/attendant', attendantRoutes);
 app.use('/api/query', queryRoutes);
+app.use('/api/credit', creditRoutes);
 
 app.use((err, req, res, next) => {
   console.error('[未处理异常]', err);
