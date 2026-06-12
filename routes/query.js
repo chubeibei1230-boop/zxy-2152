@@ -24,7 +24,7 @@ router.get('/bookings', async (req, res) => {
     let sql = `SELECT b.*, r.name as room_name, u.name as user_name, u.phone as user_phone 
                FROM bookings b LEFT JOIN rooms r ON b.room_id = r.id LEFT JOIN users u ON b.user_id = u.id 
                WHERE 1=1`;
-    const countSql = `SELECT COUNT(*) as total FROM bookings b WHERE 1=1`;
+    let countSql = `SELECT COUNT(*) as total FROM bookings b WHERE 1=1`;
     const params = [];
     const countParams = [];
 
@@ -100,8 +100,9 @@ router.get('/bookings', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('查询预约错误:', err);
-    res.status(500).json({ error: '服务器内部错误' });
+    console.error('查询预约错误:', err.message);
+    console.error('错误堆栈:', err.stack);
+    res.status(500).json({ error: '服务器内部错误', detail: err.message });
   }
 });
 
@@ -287,7 +288,7 @@ router.get('/stats/lock-releases', async (req, res) => {
                FROM lock_release_logs lrl 
                LEFT JOIN rooms r ON lrl.room_id = r.id LEFT JOIN users u ON lrl.user_id = u.id 
                WHERE 1=1`;
-    const countSql = `SELECT COUNT(*) as total, 
+    let countSql = `SELECT COUNT(*) as total, 
                       SUM(CASE WHEN release_reason LIKE '%过期%' THEN 1 ELSE 0 END) as expired_count,
                       SUM(CASE WHEN release_reason LIKE '%主动%' THEN 1 ELSE 0 END) as manual_count,
                       SUM(CASE WHEN release_reason LIKE '%转换%' THEN 1 ELSE 0 END) as converted_count

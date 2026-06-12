@@ -127,7 +127,7 @@ router.get('/rooms/availability', async (req, res) => {
           } else if (availability.reason === '此时段正被其他用户锁定中') {
             status = 'temp_locked';
             const lock = await db.get(
-              `SELECT tl.id, tl.expires_at, u.name as user_name FROM temp_locks tl 
+              `SELECT tl.id, tl.user_id, tl.expires_at, u.name as user_name FROM temp_locks tl 
                LEFT JOIN users u ON tl.user_id = u.id 
                WHERE tl.room_id = ? AND tl.date = ? AND tl.start_time = ? AND tl.end_time = ? 
                AND tl.is_released = 0 AND tl.expires_at > CURRENT_TIMESTAMP`,
@@ -405,3 +405,5 @@ router.put('/bookings/:id/arrive', requireRole('booker', 'attendant', 'admin'), 
 });
 
 module.exports = router;
+module.exports.isSlotAvailable = isSlotAvailable;
+module.exports.releaseLock = releaseLock;
