@@ -12,6 +12,7 @@ const bookingRoutes = require('./routes/bookings');
 const attendantRoutes = require('./routes/attendant');
 const queryRoutes = require('./routes/query');
 const creditRoutes = require('./routes/credit');
+const rescheduleRoutes = require('./routes/reschedule');
 
 const PORT = process.env.PORT || 8112;
 
@@ -54,6 +55,7 @@ app.get('/api/info', (req, res) => {
       attendant: '/api/attendant/* (需要 attendant 或 admin 角色)',
       query: '/api/query/* (已登录用户)',
       credit: '/api/credit/* (信用管理)',
+      reschedule: '/api/reschedule/* (改签申请与审批)',
       health: '/api/health',
       info: '/api/info'
     },
@@ -84,6 +86,7 @@ app.use('/api', bookingRoutes);
 app.use('/api/attendant', attendantRoutes);
 app.use('/api/query', queryRoutes);
 app.use('/api/credit', creditRoutes);
+app.use('/api', rescheduleRoutes);
 
 app.use((err, req, res, next) => {
   console.error('[未处理异常]', err);

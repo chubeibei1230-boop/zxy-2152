@@ -170,6 +170,47 @@ async function initDb(db) {
       FOREIGN KEY (operator_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS booking_reschedule_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      booking_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      room_id INTEGER NOT NULL,
+      original_date TEXT NOT NULL,
+      original_start_time TEXT NOT NULL,
+      original_end_time TEXT NOT NULL,
+      target_date TEXT NOT NULL,
+      target_start_time TEXT NOT NULL,
+      target_end_time TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+      approver_id INTEGER,
+      approver_role TEXT,
+      reject_reason TEXT,
+      approved_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (booking_id) REFERENCES bookings(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (room_id) REFERENCES rooms(id),
+      FOREIGN KEY (approver_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS booking_reschedule_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id INTEGER NOT NULL,
+      booking_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      action_detail TEXT,
+      operator_id INTEGER,
+      operator_role TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (request_id) REFERENCES booking_reschedule_requests(id),
+      FOREIGN KEY (booking_id) REFERENCES bookings(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (operator_id) REFERENCES users(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_bookings_room_date ON bookings(room_id, date);
     CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
     CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
@@ -179,6 +220,12 @@ async function initDb(db) {
     CREATE INDEX IF NOT EXISTS idx_user_credit_user ON user_credit(user_id);
     CREATE INDEX IF NOT EXISTS idx_credit_records_user ON credit_records(user_id);
     CREATE INDEX IF NOT EXISTS idx_credit_records_booking ON credit_records(booking_id);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_booking ON booking_reschedule_requests(booking_id);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_user ON booking_reschedule_requests(user_id);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_status ON booking_reschedule_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_room_date ON booking_reschedule_requests(room_id, target_date);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_logs_booking ON booking_reschedule_logs(booking_id);
+    CREATE INDEX IF NOT EXISTS idx_reschedule_logs_request ON booking_reschedule_logs(request_id);
   `);
 
   const userCount = await db.get('SELECT COUNT(*) as count FROM users');
